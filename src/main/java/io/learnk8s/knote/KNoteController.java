@@ -12,7 +12,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.core.sync.RequestBody;
+
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -23,8 +29,17 @@ public class KNoteController {
     @Autowired
     private NotesRepository notesRepository;
 
-    @Value("${uploadDir}")
-    private String uploadDir;
+    @Value("${aws.s3.region}")
+    private String s3Region;
+    
+    @Value("${aws.accessKeyId}")
+    private String awsId;
+
+    @Value("${aws.secretKey}")
+    private String awsKey;
+
+    @Value("${aws.s3.bucket}")
+    private String bucketName;
 
     private final Parser parser = Parser.builder().build();
     private final HtmlRenderer renderer = HtmlRenderer.builder().build();
@@ -49,7 +64,7 @@ public class KNoteController {
         }
         if (upload != null && "Upload".equals(upload)) {
             if (file != null && !file.getOriginalFilename().isEmpty()) {
-                String imageUrl = uploadImage(file);
+                String imageUrl = uploadImageToS3(file);
                 model.addAttribute("description",
                         description + " ![](" + imageUrl + ")");
             }
@@ -65,16 +80,25 @@ public class KNoteController {
         model.addAttribute("notes", notes);
     }
 
-    private String uploadImage(MultipartFile file) throws Exception {
-        File uploadsDir = new File(uploadDir);
-        if (!uploadsDir.exists()) {
-            uploadsDir.mkdirs();
-        }
+    private String uploadImageToS3(MultipartFile file) throws Exception {
         String fileId = UUID.randomUUID().toString() + "." +
                 file.getOriginalFilename().split("\\.")[1];
-        File destFile = new File(uploadDir + fileId);
-        file.transferTo(destFile);
-        return "/uploads/" + fileId;
+        String fileName = "uploads/" + fileId; // Using 'uploads/' as a folder in S3
+
+        AwsBasicCredentials awsCreds = AwsBasicCredentials.create(awsId, awsKey);
+        S3Client s3 = S3Client.builder()
+                    .credentialsProvider(StaticCredentialsProvider.create(awsCreds))
+                    .region(Region.of(s3Region)) // Use the region from the properties file
+                    .build();
+
+        PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                                                .bucket(bucketName)
+                                                .key(fileName)
+                                                .build();
+
+        s3.putObject(putObjectRequest, RequestBody.fromBytes(file.getBytes()));
+
+        return "https://s3." + s3Region + ".amazonaws.com/" + bucketName + "/" + fileName;
     }
 
     private void saveNote(String description, Model model) {
